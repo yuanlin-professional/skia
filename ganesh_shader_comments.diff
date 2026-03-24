@@ -1,0 +1,951 @@
+diff --git a/src/gpu/ganesh/GrDefaultGeoProcFactory.cpp b/src/gpu/ganesh/GrDefaultGeoProcFactory.cpp
+index 66bf178fd8..a2ecfcd847 100644
+--- a/src/gpu/ganesh/GrDefaultGeoProcFactory.cpp
++++ b/src/gpu/ganesh/GrDefaultGeoProcFactory.cpp
+@@ -128,6 +128,7 @@ private:
+ 
+                 // Start with the attribute or with uniform color
+                 if (gp.hasVertexColor()) {
++                    vertBuilder->codeAppend("// [DefaultGP: VertexColor] 使用per-vertex颜色\n");
+                     vertBuilder->codeAppendf("half4 color = %s;", gp.fInColor.name());
+                 } else {
+                     const char* colorUniformName;
+@@ -146,6 +147,7 @@ private:
+                 vertBuilder->codeAppendf("%s = color;\n", varying.vsOut());
+                 fragBuilder->codeAppendf("%s = %s;", args.fOutputColor, varying.fsIn());
+             } else {
++                fragBuilder->codeAppend("// [DefaultGP: UniformColor] 使用统一颜色\n");
+                 this->setupUniformColor(fragBuilder, uniformHandler, args.fOutputColor,
+                                         &fColorUniform);
+             }
+@@ -175,6 +177,7 @@ private:
+ 
+             // Setup coverage as pass through
+             if (gp.hasVertexCoverage() && !tweakAlpha) {
++                fragBuilder->codeAppend("// [DefaultGP: VertexCoverage] per-vertex覆盖率(抗锯齿)\n");
+                 fragBuilder->codeAppendf("half alpha = 1.0;");
+                 varyingHandler->addPassThroughAttribute(gp.fInCoverage.asShaderVar(), "alpha");
+                 if (coverageNeedsSaturate) {
+@@ -184,8 +187,10 @@ private:
+                     fragBuilder->codeAppendf("half4 %s = half4(alpha);", args.fOutputCoverage);
+                 }
+             } else if (gp.fCoverage == 0xff) {
++                fragBuilder->codeAppend("// [DefaultGP: FullCoverage] 完全覆盖(无AA)\n");
+                 fragBuilder->codeAppendf("const half4 %s = half4(1);", args.fOutputCoverage);
+             } else {
++                fragBuilder->codeAppend("// [DefaultGP: UniformCoverage] 统一覆盖率\n");
+                 const char* fragCoverage;
+                 fCoverageUniform = uniformHandler->addUniform(nullptr,
+                                                               kFragment_GrShaderFlag,
+diff --git a/src/gpu/ganesh/GrGeometryProcessor.cpp b/src/gpu/ganesh/GrGeometryProcessor.cpp
+index 8d2cedac90..86865d2786 100644
+--- a/src/gpu/ganesh/GrGeometryProcessor.cpp
++++ b/src/gpu/ganesh/GrGeometryProcessor.cpp
+@@ -242,6 +242,7 @@ ProgramImpl::FPCoordsMap ProgramImpl::collectTransforms(GrGLSLVertexBuilder* vb,
+ }
+ 
+ void ProgramImpl::emitTransformCode(GrGLSLVertexBuilder* vb, GrGLSLUniformHandler* uniformHandler) {
++    vb->codeAppend("// [坐标变换] 在VS中预计算FP采样坐标varying\n");
+     // Because descendant varyings may be computed using the varyings of ancestor FPs we make
+     // sure to visit the varyings according to FP pre-order traversal by dumping them into a
+     // priority queue.
+@@ -300,6 +301,7 @@ void ProgramImpl::emitTransformCode(GrGLSLVertexBuilder* vb, GrGLSLUniformHandle
+             inputStr = inputCoords.getName();
+         }
+ 
++        vb->codeAppendf("// 为FP '%s' 计算变换坐标\n", fp->name());
+         vb->codeAppend("{\n");
+         if (info.varying.type() == SkSLType::kFloat2) {
+             if (vb->getProgramBuilder()->shaderCaps()->fNonsquareMatrixSupport) {
+diff --git a/src/gpu/ganesh/effects/GrBezierEffect.cpp b/src/gpu/ganesh/effects/GrBezierEffect.cpp
+index 547527301e..19230e30b8 100644
+--- a/src/gpu/ganesh/effects/GrBezierEffect.cpp
++++ b/src/gpu/ganesh/effects/GrBezierEffect.cpp
+@@ -114,6 +114,7 @@ void GrConicEffect::Impl::onEmitCode(EmitArgs& args, GrGPArgs* gpArgs) {
+     fragBuilder->declAppend(gFM);
+     fragBuilder->declAppend(func);
+ 
++    fragBuilder->codeAppend("// [Conic] Loop-Blinn算法渲染圆锥曲线\n");
+     fragBuilder->codeAppendf("%s = dFdx(%s.xyz);", dklmdx.c_str(), v.fsIn());
+     fragBuilder->codeAppendf("%s = dFdy(%s.xyz);", dklmdy.c_str(), v.fsIn());
+     fragBuilder->codeAppendf("%s = 2.0 * %s.x * %s.x - %s.y * %s.z - %s.z * %s.y;",
+@@ -280,6 +281,7 @@ void GrQuadEffect::Impl::onEmitCode(EmitArgs& args, GrGPArgs* gpArgs) {
+                         &fLocalMatrixUniform);
+     }
+ 
++    fragBuilder->codeAppend("// [Quad] 二次曲线隐式表面边缘检测\n");
+     fragBuilder->codeAppendf("half edgeAlpha;");
+ 
+     fragBuilder->codeAppendf("half2 duvdx = half2(dFdx(%s.xy));", v.fsIn());
+diff --git a/src/gpu/ganesh/effects/GrBicubicEffect.cpp b/src/gpu/ganesh/effects/GrBicubicEffect.cpp
+index fe7a508b43..2643a0b08f 100644
+--- a/src/gpu/ganesh/effects/GrBicubicEffect.cpp
++++ b/src/gpu/ganesh/effects/GrBicubicEffect.cpp
+@@ -56,6 +56,7 @@ void GrBicubicEffect::Impl::emitCode(EmitArgs& args) {
+     // The use of "texel" above is somewhat abstract as we're sampling a child processor. It is
+     // assumed the child processor represents something akin to a nearest neighbor sampled texture.
+     if (bicubicEffect.fDirection == GrBicubicEffect::Direction::kXY) {
++        fragBuilder->codeAppend("// [Bicubic: XY] 双向双三次插值\n");
+         fragBuilder->codeAppendf("float2 coord = %s - float2(0.5);", args.fSampleCoord);
+         fragBuilder->codeAppend("half2 f = half2(fract(coord));");
+         fragBuilder->codeAppend("coord += 0.5 - f;");
+@@ -79,6 +80,11 @@ void GrBicubicEffect::Impl::emitCode(EmitArgs& args) {
+                 "half4 bicubicColor = wy.x * s0 + wy.y * s1 + wy.z * s2 + wy.w * s3;");
+     } else {
+         const char* d = bicubicEffect.fDirection == Direction::kX ? "x" : "y";
++        if (bicubicEffect.fDirection == Direction::kX) {
++            fragBuilder->codeAppend("// [Bicubic: X] 水平方向双三次插值\n");
++        } else {
++            fragBuilder->codeAppend("// [Bicubic: Y] 垂直方向双三次插值\n");
++        }
+         fragBuilder->codeAppendf("float coord = %s.%s - 0.5;", args.fSampleCoord, d);
+         fragBuilder->codeAppend("half f = half(fract(coord));");
+         fragBuilder->codeAppend("coord += 0.5 - f;");
+diff --git a/src/gpu/ganesh/effects/GrBitmapTextGeoProc.cpp b/src/gpu/ganesh/effects/GrBitmapTextGeoProc.cpp
+index 79cbad1782..5bd7e79bc2 100644
+--- a/src/gpu/ganesh/effects/GrBitmapTextGeoProc.cpp
++++ b/src/gpu/ganesh/effects/GrBitmapTextGeoProc.cpp
+@@ -91,6 +91,7 @@ private:
+         // Setup pass through color
+         fragBuilder->codeAppendf("half4 %s;", args.fOutputColor);
+         if (btgp.hasVertexColor()) {
++            vertBuilder->codeAppend("// [BitmapText: VertexColor] per-vertex文字颜色\n");
+             varyingHandler->addPassThroughAttribute(btgp.fInColor.asShaderVar(), args.fOutputColor);
+         } else {
+             this->setupUniformColor(fragBuilder, uniformHandler, args.fOutputColor,
+@@ -117,10 +118,12 @@ private:
+         }
+ 
+         if (btgp.fMaskFormat == MaskFormat::kARGB) {
++            fragBuilder->codeAppend("// [BitmapText: ARGB] 彩色位图字形\n");
+             // modulate by color
+             fragBuilder->codeAppendf("%s = %s * texColor;", args.fOutputColor, args.fOutputColor);
+             fragBuilder->codeAppendf("const half4 %s = half4(1);", args.fOutputCoverage);
+         } else {
++            fragBuilder->codeAppend("// [BitmapText: Coverage] 灰度覆盖率字形\n");
+             fragBuilder->codeAppendf("half4 %s = texColor;", args.fOutputCoverage);
+         }
+     }
+diff --git a/src/gpu/ganesh/effects/GrBlendFragmentProcessor.cpp b/src/gpu/ganesh/effects/GrBlendFragmentProcessor.cpp
+index c0304c7c10..5932c95cca 100644
+--- a/src/gpu/ganesh/effects/GrBlendFragmentProcessor.cpp
++++ b/src/gpu/ganesh/effects/GrBlendFragmentProcessor.cpp
+@@ -237,6 +237,7 @@ std::unique_ptr<GrFragmentProcessor::ProgramImpl> BlendFragmentProcessor::onMake
+ 
+             if (bfp.fShareBlendLogic) {
+                 // Use a blend expression that may rely on uniforms.
++                fragBuilder->codeAppend("// [Blend] 通过uniform选择的blend模式\n");
+                 std::string blendExpr = GrGLSLBlend::BlendExpression(&args.fFp,
+                                                                      args.fUniformHandler,
+                                                                      &fBlendUniform,
+@@ -246,6 +247,7 @@ std::unique_ptr<GrFragmentProcessor::ProgramImpl> BlendFragmentProcessor::onMake
+                 fragBuilder->codeAppendf("return %s;", blendExpr.c_str());
+             } else {
+                 // Blend src and dst colors together using a hardwired built-in blend function.
++                fragBuilder->codeAppend("// [Blend] 硬编码的blend函数\n");
+                 fragBuilder->codeAppendf("return %s(%s, %s);",
+                                          skgpu::BlendFuncName(mode),
+                                          srcColor.c_str(),
+diff --git a/src/gpu/ganesh/effects/GrColorTableEffect.cpp b/src/gpu/ganesh/effects/GrColorTableEffect.cpp
+index b547efdf78..0a855b3593 100644
+--- a/src/gpu/ganesh/effects/GrColorTableEffect.cpp
++++ b/src/gpu/ganesh/effects/GrColorTableEffect.cpp
+@@ -53,16 +53,19 @@ std::unique_ptr<GrFragmentProcessor::ProgramImpl> ColorTableEffect::onMakeProgra
+     public:
+         void emitCode(EmitArgs& args) override {
+             GrGLSLFPFragmentBuilder* fragBuilder = args.fFragBuilder;
++            fragBuilder->codeAppend("// [ColorTable] 通过LUT纹理查表变换颜色\n");
+             SkString inputColor = this->invokeChild(kInputFPIndex, args);
+             SkString a = this->invokeChild(kTexEffectFPIndex, args, "half2(coord.a, 0.5)");
+             SkString r = this->invokeChild(kTexEffectFPIndex, args, "half2(coord.r, 1.5)");
+             SkString g = this->invokeChild(kTexEffectFPIndex, args, "half2(coord.g, 2.5)");
+             SkString b = this->invokeChild(kTexEffectFPIndex, args, "half2(coord.b, 3.5)");
+             fragBuilder->codeAppendf(
+-                    "half4 coord = 255 * unpremul(%s) + 0.5;\n"
++                    "half4 coord = 255 * unpremul(%s) + 0.5;\n",
++                    inputColor.c_str());
++            fragBuilder->codeAppend("// [ColorTable: Premul] 重新预乘alpha\n");
++            fragBuilder->codeAppendf(
+                     "half4 color = half4(%s.a, %s.a, %s.a, 1);\n"
+                     "return color * %s.a;\n",
+-                    inputColor.c_str(),
+                     r.c_str(),
+                     g.c_str(),
+                     b.c_str(),
+diff --git a/src/gpu/ganesh/effects/GrConvexPolyEffect.cpp b/src/gpu/ganesh/effects/GrConvexPolyEffect.cpp
+index 87acb33cfa..4136e38abc 100644
+--- a/src/gpu/ganesh/effects/GrConvexPolyEffect.cpp
++++ b/src/gpu/ganesh/effects/GrConvexPolyEffect.cpp
+@@ -124,6 +124,11 @@ std::unique_ptr<GrFragmentProcessor::ProgramImpl> GrConvexPolyEffect::onMakeProg
+             GrGLSLFPFragmentBuilder* fragBuilder = args.fFragBuilder;
+             fragBuilder->codeAppend("float alpha = 1.0;\n"
+                                     "float edge;\n");
++            if (GrClipEdgeTypeIsAA(cpe.fEdgeType)) {
++                fragBuilder->codeAppend("// [ConvexPoly: AA] 抗锯齿边缘(saturate)\n");
++            } else {
++                fragBuilder->codeAppend("// [ConvexPoly: NonAA] 硬边缘(step)\n");
++            }
+             for (int i = 0; i < cpe.fEdgeCount; ++i) {
+                 fragBuilder->codeAppendf("edge = dot(float3(%s[%d]), sk_FragCoord.xy1);\n",
+                                          edgeArrayName, i);
+@@ -135,6 +140,7 @@ std::unique_ptr<GrFragmentProcessor::ProgramImpl> GrConvexPolyEffect::onMakeProg
+             }
+ 
+             if (GrClipEdgeTypeIsInverseFill(cpe.fEdgeType)) {
++                fragBuilder->codeAppend("// [ConvexPoly: Inverse] 反转填充\n");
+                 fragBuilder->codeAppend("alpha = 1.0 - alpha;\n");
+             }
+ 
+diff --git a/src/gpu/ganesh/effects/GrCoverageSetOpXP.cpp b/src/gpu/ganesh/effects/GrCoverageSetOpXP.cpp
+index c2bedd733b..b7cc379e4d 100644
+--- a/src/gpu/ganesh/effects/GrCoverageSetOpXP.cpp
++++ b/src/gpu/ganesh/effects/GrCoverageSetOpXP.cpp
+@@ -58,6 +58,7 @@ std::unique_ptr<GrXferProcessor::ProgramImpl> CoverageSetOpXP::makeProgramImpl()
+         void emitOutputsForBlendState(const EmitArgs& args) override {
+             const CoverageSetOpXP& xp = args.fXP.cast<CoverageSetOpXP>();
+             GrGLSLXPFragmentBuilder* fb = args.fXPFragBuilder;
++            fb->codeAppend("// [CoverageSetOp] 覆盖率集合运算\n");
+             if (xp.fInvertCoverage) {
+                 fb->codeAppendf("%s = 1.0 - %s;", args.fOutputPrimary, args.fInputCoverage);
+             } else {
+diff --git a/src/gpu/ganesh/effects/GrCustomXfermode.cpp b/src/gpu/ganesh/effects/GrCustomXfermode.cpp
+index 2dcf3cf641..607f837d88 100644
+--- a/src/gpu/ganesh/effects/GrCustomXfermode.cpp
++++ b/src/gpu/ganesh/effects/GrCustomXfermode.cpp
+@@ -134,6 +134,7 @@ std::unique_ptr<GrXferProcessor::ProgramImpl> CustomXP::makeProgramImpl() const
+             SkASSERT(xp.hasHWBlendEquation());
+ 
+             GrGLSLXPFragmentBuilder* fragBuilder = args.fXPFragBuilder;
++            fragBuilder->codeAppendf("// [CustomXfer: %s] 自定义blend模式\n", xp.name());
+             fragBuilder->enableAdvancedBlendEquationIfNeeded(xp.fHWBlendEquation);
+ 
+             // Apply coverage by multiplying it into the src color before blending. This will "just
+@@ -154,6 +155,7 @@ std::unique_ptr<GrXferProcessor::ProgramImpl> CustomXP::makeProgramImpl() const
+                                      const GrXferProcessor& proc) override {
+             const CustomXP& xp = proc.cast<CustomXP>();
+             SkASSERT(!xp.hasHWBlendEquation());
++            fragBuilder->codeAppendf("// [CustomXfer: %s] 自定义blend模式\n", xp.name());
+ 
+             std::string blendExpr = GrGLSLBlend::BlendExpression(
+                     &xp, uniformHandler, &fBlendUniform, srcColor, dstColor, xp.fMode);
+diff --git a/src/gpu/ganesh/effects/GrDisableColorXP.cpp b/src/gpu/ganesh/effects/GrDisableColorXP.cpp
+index 2529ac160a..434b4fdfec 100644
+--- a/src/gpu/ganesh/effects/GrDisableColorXP.cpp
++++ b/src/gpu/ganesh/effects/GrDisableColorXP.cpp
+@@ -49,6 +49,7 @@ std::unique_ptr<GrXferProcessor::ProgramImpl> DisableColorXP::makeProgramImpl()
+                 // up drawing nothing. So this fix just sets the gl_FragColor arbitrarily to 0.
+                 // https://bugs.chromium.org/p/chromium/issues/detail?id=445377
+                 GrGLSLXPFragmentBuilder* fragBuilder = args.fXPFragBuilder;
++                fragBuilder->codeAppend("// [DisableColor] 禁用颜色输出,仅写覆盖率\n");
+                 fragBuilder->codeAppendf("%s = half4(0);", args.fOutputPrimary);
+             }
+         }
+diff --git a/src/gpu/ganesh/effects/GrDistanceFieldGeoProc.cpp b/src/gpu/ganesh/effects/GrDistanceFieldGeoProc.cpp
+index 49835d2f1b..fd92b3a046 100644
+--- a/src/gpu/ganesh/effects/GrDistanceFieldGeoProc.cpp
++++ b/src/gpu/ganesh/effects/GrDistanceFieldGeoProc.cpp
+@@ -137,6 +137,7 @@ private:
+ 
+         fragBuilder->codeAppend("half afwidth;");
+         if (isUniformScale) {
++            fragBuilder->codeAppend("// [DF-A8: UniformScale] 均匀缩放距离场\n");
+             // For uniform scale, we adjust for the effect of the transformation on the distance
+             // by using the length of the gradient of the t coordinate in the y direction.
+             // We use st coordinates to ensure we're mapping 1:1 from texel space to pixel space.
+@@ -150,6 +151,7 @@ private:
+                         "afwidth = abs(" SK_DistanceFieldAAFactor "*half(dFdx(%s.x)));", st.fsIn());
+             }
+         } else if (isSimilarity) {
++            fragBuilder->codeAppend("// [DF-A8: Similarity] 相似变换距离场\n");
+             // For similarity transform, we adjust the effect of the transformation on the distance
+             // by using the length of the gradient of the texture coordinates. We use st coordinates
+             // to ensure we're mapping 1:1 from texel space to pixel space.
+@@ -163,6 +165,7 @@ private:
+             }
+             fragBuilder->codeAppend("afwidth = abs(" SK_DistanceFieldAAFactor "*st_grad_len);");
+         } else {
++            fragBuilder->codeAppend("// [DF-A8: General] 一般变换距离场\n");
+             // For general transforms, to determine the amount of correction we multiply a unit
+             // vector pointing along the SDF gradient direction by the Jacobian of the st coords
+             // (which is the inverse transform for this fragment) and take the length of the result.
+@@ -393,6 +396,7 @@ private:
+                         dfPathEffect.fLocalMatrix,
+                         &fLocalMatrixUniform);
+ 
++        fragBuilder->codeAppend("// [DF-Path] 路径距离场\n");
+         // Use highp to work around aliasing issues
+         fragBuilder->codeAppendf("float2 uv = %s;", uv.fsIn());
+         fragBuilder->codeAppend("half4 texColor;");
+@@ -638,6 +642,8 @@ private:
+                         dfTexEffect.fLocalMatrix,
+                         &fLocalMatrixUniform);
+ 
++        fragBuilder->codeAppend("// [DF-LCD] LCD子像素距离场\n");
++
+         // set up varyings
+         GrGLSLVarying uv, texIdx, st;
+         append_index_uv_varyings(args,
+diff --git a/src/gpu/ganesh/effects/GrMatrixEffect.cpp b/src/gpu/ganesh/effects/GrMatrixEffect.cpp
+index 185396d949..50fce93693 100644
+--- a/src/gpu/ganesh/effects/GrMatrixEffect.cpp
++++ b/src/gpu/ganesh/effects/GrMatrixEffect.cpp
+@@ -40,6 +40,7 @@ std::unique_ptr<GrFragmentProcessor::ProgramImpl> GrMatrixEffect::onMakeProgramI
+                                                           kFragment_GrShaderFlag,
+                                                           SkSLType::kFloat3x3,
+                                                           SkSL::SampleUsage::MatrixUniformName());
++            args.fFragBuilder->codeAppend("// [MatrixEffect] 应用坐标变换矩阵后调用子FP\n");
+             args.fFragBuilder->codeAppendf("return %s;\n",
+                                            this->invokeChildWithMatrix(0, args).c_str());
+         }
+diff --git a/src/gpu/ganesh/effects/GrModulateAtlasCoverageEffect.cpp b/src/gpu/ganesh/effects/GrModulateAtlasCoverageEffect.cpp
+index 607ca30585..c07899fa69 100644
+--- a/src/gpu/ganesh/effects/GrModulateAtlasCoverageEffect.cpp
++++ b/src/gpu/ganesh/effects/GrModulateAtlasCoverageEffect.cpp
+@@ -67,6 +67,7 @@ GrModulateAtlasCoverageEffect::onMakeProgramImpl() const {
+                 fBoundsUniform = uniHandler->addUniform(&fp, kFragment_GrShaderFlag,
+                                                         SkSLType::kFloat4, "bounds", &boundsName);
+                 // Are we inside the path's valid atlas bounds?
++                f->codeAppend("// [AtlasCoverage] 边界检查\n");
+                 f->codeAppendf("if (all(greaterThan(sk_FragCoord.xy, %s.xy)) && "
+                                    "all(lessThan(sk_FragCoord.xy, %s.zw))) ",
+                                boundsName, boundsName);
+@@ -80,6 +81,7 @@ GrModulateAtlasCoverageEffect::onMakeProgramImpl() const {
+                                                                  SkSLType::kHalf2, "coverageInvert",
+                                                                  &coverageMaybeInvertName);
+             // Invert coverage, if needed.
++            f->codeAppend("// [AtlasCoverage: Invert] 反转覆盖率\n");
+             f->codeAppendf("coverage = coverage * %s.x + %s.y;",
+                            coverageMaybeInvertName, coverageMaybeInvertName);
+             f->codeAppendf("return %s * coverage;", inputColor.c_str());
+diff --git a/src/gpu/ganesh/effects/GrPerlinNoise2Effect.cpp b/src/gpu/ganesh/effects/GrPerlinNoise2Effect.cpp
+index 613382e16a..61ade221fe 100644
+--- a/src/gpu/ganesh/effects/GrPerlinNoise2Effect.cpp
++++ b/src/gpu/ganesh/effects/GrPerlinNoise2Effect.cpp
+@@ -203,12 +203,16 @@ void GrPerlinNoise2Effect::Impl::emitCode(EmitArgs& args) {
+     fragBuilder->codeAppendf("half4 color = half4(0);");
+ 
+     if (pne.stitchTiles()) {
++        fragBuilder->codeAppend("// [Perlin Noise: Stitched] 支持无缝平铺的噪声\n");
+         fragBuilder->codeAppendf("half2 stitchData = %s;", stitchDataUni);
++    } else {
++        fragBuilder->codeAppend("// [Perlin Noise: Non-stitched] 标准噪声生成\n");
+     }
+ 
+     fragBuilder->codeAppendf("half ratio = 1.0;");
+ 
+     // Loop over all octaves
++    fragBuilder->codeAppend("// [Octave累加] 多频率噪声叠加(分形)\n");
+     fragBuilder->codeAppendf("for (int octave = 0; octave < %d; ++octave) {", pne.numOctaves());
+     fragBuilder->codeAppendf("color += ");
+     if (pne.type() != SkPerlinNoiseShaderType::kFractalNoise) {
+diff --git a/src/gpu/ganesh/effects/GrPorterDuffXferProcessor.cpp b/src/gpu/ganesh/effects/GrPorterDuffXferProcessor.cpp
+index b416767a6e..80d9348488 100644
+--- a/src/gpu/ganesh/effects/GrPorterDuffXferProcessor.cpp
++++ b/src/gpu/ganesh/effects/GrPorterDuffXferProcessor.cpp
+@@ -111,6 +111,7 @@ std::unique_ptr<GrXferProcessor::ProgramImpl> PorterDuffXferProcessor::makeProgr
+         void emitOutputsForBlendState(const EmitArgs& args) override {
+             const PorterDuffXferProcessor& xp = args.fXP.cast<PorterDuffXferProcessor>();
+             GrGLSLXPFragmentBuilder* fragBuilder = args.fXPFragBuilder;
++            fragBuilder->codeAppendf("// [PD: %s] Porter-Duff混合\n", xp.name());
+ 
+             const BlendFormula& blendFormula = xp.fBlendFormula;
+             if (blendFormula.hasSecondaryOutput()) {
+@@ -178,6 +179,7 @@ std::unique_ptr<GrXferProcessor::ProgramImpl> ShaderPDXferProcessor::makeProgram
+                                      const char* outColorSecondary,
+                                      const GrXferProcessor& proc) override {
+             const ShaderPDXferProcessor& xp = proc.cast<ShaderPDXferProcessor>();
++            fragBuilder->codeAppendf("// [ShaderPD: %s] shader端Porter-Duff(需读dst)\n", xp.name());
+ 
+             std::string blendExpr = GrGLSLBlend::BlendExpression(
+                     &xp, uniformHandler, &fBlendUniform, srcColor, dstColor, xp.fXfermode);
+@@ -275,6 +277,7 @@ std::unique_ptr<GrXferProcessor::ProgramImpl> PDLCDXferProcessor::makeProgramImp
+                                                              "alpha",
+                                                              &alpha);
+             GrGLSLXPFragmentBuilder* fragBuilder = args.fXPFragBuilder;
++            fragBuilder->codeAppend("// [PDLCD] LCD子像素Porter-Duff混合\n");
+             // We want to force our primary output to be alpha * Coverage, where alpha is the alpha
+             // value of the src color. We know that there are no color stages (or we wouldn't have
+             // created this xp) and the r,g, and b channels of the op's input color are baked into
+diff --git a/src/gpu/ganesh/effects/GrRRectEffect.cpp b/src/gpu/ganesh/effects/GrRRectEffect.cpp
+index a0688a56ed..2b9f2a7642 100644
+--- a/src/gpu/ganesh/effects/GrRRectEffect.cpp
++++ b/src/gpu/ganesh/effects/GrRRectEffect.cpp
+@@ -211,6 +211,7 @@ void CircularRRectEffect::Impl::emitCode(EmitArgs& args) {
+     // alphas together.
+     switch (crre.fCircularCornerFlags) {
+         case CircularRRectEffect::kAll_CornerFlags:
++            fragBuilder->codeAppend("// [RRect: AllCorners] 四角圆角距离计算\n");
+             fragBuilder->codeAppendf("float2 dxy0 = %s.LT - sk_FragCoord.xy;", rectName);
+             fragBuilder->codeAppendf("float2 dxy1 = sk_FragCoord.xy - %s.RB;", rectName);
+             fragBuilder->codeAppend("float2 dxy = max(max(dxy0, dxy1), 0.0);");
+@@ -297,6 +298,7 @@ void CircularRRectEffect::Impl::emitCode(EmitArgs& args) {
+     }
+ 
+     if (GrClipEdgeType::kInverseFillAA == crre.fEdgeType) {
++        fragBuilder->codeAppend("// [RRect: Inverse] 反转覆盖率(内部透明)\n");
+         fragBuilder->codeAppend("alpha = 1.0 - alpha;");
+     }
+ 
+diff --git a/src/gpu/ganesh/effects/GrShadowGeoProc.cpp b/src/gpu/ganesh/effects/GrShadowGeoProc.cpp
+index 3eabaf3a97..fbbc65c8e7 100644
+--- a/src/gpu/ganesh/effects/GrShadowGeoProc.cpp
++++ b/src/gpu/ganesh/effects/GrShadowGeoProc.cpp
+@@ -48,6 +48,7 @@ private:
+         WriteOutputPosition(vertBuilder, gpArgs, rsgp.inPosition().name());
+         // No need for local coordinates, this GP does not combine with fragment processors
+ 
++        fragBuilder->codeAppend("// [Shadow] 圆角矩形阴影LUT查表\n");
+         fragBuilder->codeAppend("half d = length(shadowParams.xy);");
+         fragBuilder->codeAppend("float2 uv = float2(shadowParams.z * (1.0 - d), 0.5);");
+         fragBuilder->codeAppend("half factor = ");
+diff --git a/src/gpu/ganesh/effects/GrSkSLFP.cpp b/src/gpu/ganesh/effects/GrSkSLFP.cpp
+index e31ddea55f..1660a1dc47 100644
+--- a/src/gpu/ganesh/effects/GrSkSLFP.cpp
++++ b/src/gpu/ganesh/effects/GrSkSLFP.cpp
+@@ -93,6 +93,7 @@ public:
+                 SkAssertResult(SkSL::type_to_sksltype(fContext, *type, &gpuType));
+ 
+                 if (*fSpecialized++ == Specialized::kYes) {
++                    // [SkSL FP] specialized uniform内联为常量
+                     SkASSERTF(!isArray, "specializing array uniforms is not allowed");
+                     std::string value = SkSLTypeString(gpuType);
+                     value.append("(");
+@@ -126,8 +127,11 @@ public:
+ 
+             void defineFunction(const char* decl, const char* body, bool isMain) override {
+                 if (isMain) {
++                    fArgs.fFragBuilder->codeAppend("// [用户SkSL: main] 以下是SkRuntimeEffect用户自定义shader主体\n"
++                                                   "// 拼接原因: 用户通过SkRuntimeEffect提供了自定义着色逻辑\n");
+                     fArgs.fFragBuilder->codeAppend(body);
+                 } else {
++                    fArgs.fFragBuilder->functions().append("// [用户SkSL: 辅助函数] 用户自定义的helper function\n");
+                     fArgs.fFragBuilder->emitFunction(decl, body);
+                 }
+             }
+@@ -137,14 +141,17 @@ public:
+             }
+ 
+             void defineStruct(const char* definition) override {
++                fArgs.fFragBuilder->definitionAppend("// [用户SkSL: 结构体定义]\n");
+                 fArgs.fFragBuilder->definitionAppend(definition);
+             }
+ 
+             void declareGlobal(const char* declaration) override {
++                fArgs.fFragBuilder->definitionAppend("// [用户SkSL: 全局变量]\n");
+                 fArgs.fFragBuilder->definitionAppend(declaration);
+             }
+ 
+             std::string sampleShader(int index, std::string coords) override {
++                fArgs.fFragBuilder->codeAppend("// [SkSL FP] 调用子shader采样\n");
+                 // If the child was sampled using the coords passed to main (and they are never
+                 // modified), then we will have marked the child as PassThrough. The code generator
+                 // doesn't know that, and still supplies coords. Inside invokeChild, we assert that
+@@ -167,6 +174,7 @@ public:
+             }
+ 
+             std::string sampleColorFilter(int index, std::string color) override {
++                fArgs.fFragBuilder->codeAppend("// [SkSL FP] 调用子colorFilter\n");
+                 return std::string(fSelf->invokeChild(index,
+                                                       color.empty() ? fInputColor : color.c_str(),
+                                                       fArgs)
+@@ -174,6 +182,7 @@ public:
+             }
+ 
+             std::string sampleBlender(int index, std::string src, std::string dst) override {
++                fArgs.fFragBuilder->codeAppend("// [SkSL FP] 调用子blender\n");
+                 if (!fSelf->childProcessor(index)) {
+                     return SkSL::String::printf("blend_src_over(%s, %s)", src.c_str(), dst.c_str());
+                 }
+@@ -184,6 +193,7 @@ public:
+             // These intrinsics take and return 3-component vectors, but child FPs operate on
+             // 4-component vectors. We use swizzles here to paper over the difference.
+             std::string toLinearSrgb(std::string color) override {
++                fArgs.fFragBuilder->codeAppend("// [SkSL FP] 色彩空间→线性sRGB\n");
+                 const GrSkSLFP& fp = fArgs.fFp.cast<GrSkSLFP>();
+                 if (fp.fToLinearSrgbChildIndex < 0) {
+                     return color;
+@@ -195,6 +205,7 @@ public:
+             }
+ 
+             std::string fromLinearSrgb(std::string color) override {
++                fArgs.fFragBuilder->codeAppend("// [SkSL FP] 线性sRGB→目标色彩空间\n");
+                 const GrSkSLFP& fp = fArgs.fFp.cast<GrSkSLFP>();
+                 if (fp.fFromLinearSrgbChildIndex < 0) {
+                     return color;
+diff --git a/src/gpu/ganesh/effects/GrTextureEffect.cpp b/src/gpu/ganesh/effects/GrTextureEffect.cpp
+index e29d42acad..117cfa8f71 100644
+--- a/src/gpu/ganesh/effects/GrTextureEffect.cpp
++++ b/src/gpu/ganesh/effects/GrTextureEffect.cpp
+@@ -377,6 +377,7 @@ void GrTextureEffect::Impl::emitCode(EmitArgs& args) {
+ 
+     if (te.fShaderModes[0] == ShaderMode::kNone &&
+         te.fShaderModes[1] == ShaderMode::kNone) {
++        fb->codeAppend("// [Wrap: None] 硬件wrap,无shader处理\n");
+         fb->codeAppendf("return ");
+         fb->appendTextureLookup(fSamplerHandle, args.fSampleCoord);
+         fb->codeAppendf(";");
+@@ -497,10 +498,12 @@ void GrTextureEffect::Impl::emitCode(EmitArgs& args) {
+                 case ShaderMode::kClampToBorder_Nearest:
+                 case ShaderMode::kClampToBorder_Filter:
+                 case ShaderMode::kClamp:
++                    fb->codeAppend("// [Wrap: Clamp] 钳制坐标到[0,1]\n");
+                     fb->codeAppendf("subsetCoord.%s = inCoord.%s;", coordSwizzle, coordSwizzle);
+                     break;
+                 case ShaderMode::kRepeat_Nearest_None:
+                 case ShaderMode::kRepeat_Linear_None:
++                    fb->codeAppend("// [Wrap: Repeat+Nearest] 取模实现repeat\n");
+                     fb->codeAppendf(
+                             "subsetCoord.%s = mod(inCoord.%s - %s.%s, %s.%s - %s.%s) + %s.%s;",
+                             coordSwizzle, coordSwizzle, subsetName, subsetStartSwizzle, subsetName,
+@@ -509,6 +512,7 @@ void GrTextureEffect::Impl::emitCode(EmitArgs& args) {
+                     break;
+                 case ShaderMode::kRepeat_Nearest_Mipmap:
+                 case ShaderMode::kRepeat_Linear_Mipmap:
++                    fb->codeAppend("// [Wrap: Repeat+Linear+Mipmap] repeat+mip选择\n");
+                     // The approach here is to generate two sets of texture coords that
+                     // are both "moving" at the same speed (if not direction) as
+                     // inCoords. We accomplish that by using two out of phase mirror
+@@ -541,6 +545,7 @@ void GrTextureEffect::Impl::emitCode(EmitArgs& args) {
+                     fb->codeAppend("}");
+                     break;
+                 case ShaderMode::kMirrorRepeat:
++                    fb->codeAppend("// [Wrap: MirrorRepeat] 镜像重复\n");
+                     fb->codeAppend("{");
+                     fb->codeAppendf("float w = %s.%s - %s.%s;", subsetName, subsetStopSwizzle,
+                                     subsetName, subsetStartSwizzle);
+@@ -705,6 +710,7 @@ void GrTextureEffect::Impl::emitCode(EmitArgs& args) {
+         // Do soft edge shader filtering against border color for kClampToBorderFilter using
+         // the err values calculated above.
+         if (m[0] == ShaderMode::kClampToBorder_Filter) {
++            fb->codeAppend("// [Wrap: ClampToBorder+Filter] 渐变边界过渡\n");
+             fb->codeAppendf("textureColor = mix(textureColor, %s, min(abs(errX), 1));", borderName);
+         }
+         if (m[1] == ShaderMode::kClampToBorder_Filter) {
+@@ -715,6 +721,7 @@ void GrTextureEffect::Impl::emitCode(EmitArgs& args) {
+         // subset boundaries. Snap the input coordinates to nearest neighbor (with an
+         // epsilon) before comparing to the subset rect to avoid GPU interpolation errors
+         if (m[0] == ShaderMode::kClampToBorder_Nearest) {
++            fb->codeAppend("// [Wrap: ClampToBorder+Nearest] 硬边界过渡\n");
+             fb->codeAppendf(
+                     "float snappedX = floor(inCoord.x + 0.001) + 0.5;"
+                     "if (snappedX < %s.x || snappedX > %s.z) {"
+diff --git a/src/gpu/ganesh/effects/GrYUVtoRGBEffect.cpp b/src/gpu/ganesh/effects/GrYUVtoRGBEffect.cpp
+index 62169697f8..1a42b1f76d 100644
+--- a/src/gpu/ganesh/effects/GrYUVtoRGBEffect.cpp
++++ b/src/gpu/ganesh/effects/GrYUVtoRGBEffect.cpp
+@@ -269,6 +269,7 @@ std::unique_ptr<GrFragmentProcessor::ProgramImpl> GrYUVtoRGBEffect::onMakeProgra
+ 
+             const char* sampleCoords = "";
+             if (yuvEffect.fSnap[0] || yuvEffect.fSnap[1]) {
++                fragBuilder->codeAppend("// [YUV坐标Snap] 对齐到texel中心避免采样误差\n");
+                 fragBuilder->codeAppendf("float2 snappedCoords = %s;", args.fSampleCoord);
+                 if (yuvEffect.fSnap[0]) {
+                     fragBuilder->codeAppend("snappedCoords.x = floor(snappedCoords.x) + 0.5;");
+@@ -308,6 +309,7 @@ std::unique_ptr<GrFragmentProcessor::ProgramImpl> GrYUVtoRGBEffect::onMakeProgra
+             }
+ 
+             if (kIdentity_SkYUVColorSpace != yuvEffect.fYUVColorSpace) {
++                fragBuilder->codeAppend("// [YUV→RGB矩阵] 应用色彩空间转换矩阵\n");
+                 fColorSpaceMatrixVar = args.fUniformHandler->addUniform(&yuvEffect,
+                         kFragment_GrShaderFlag, SkSLType::kHalf3x3, "colorSpaceMatrix");
+                 fColorSpaceTranslateVar = args.fUniformHandler->addUniform(&yuvEffect,
+@@ -319,6 +321,7 @@ std::unique_ptr<GrFragmentProcessor::ProgramImpl> GrYUVtoRGBEffect::onMakeProgra
+             }
+             if (hasAlpha) {
+                 // premultiply alpha
++                fragBuilder->codeAppend("// [Alpha预乘] 将RGB乘以alpha\n");
+                 fragBuilder->codeAppendf("color.rgb *= color.a;");
+             }
+             fragBuilder->codeAppendf("return color;");
+diff --git a/src/gpu/ganesh/glsl/GrGLSLFragmentShaderBuilder.cpp b/src/gpu/ganesh/glsl/GrGLSLFragmentShaderBuilder.cpp
+index 31c0829db1..030e366b45 100644
+--- a/src/gpu/ganesh/glsl/GrGLSLFragmentShaderBuilder.cpp
++++ b/src/gpu/ganesh/glsl/GrGLSLFragmentShaderBuilder.cpp
+@@ -23,6 +23,7 @@ const char* GrGLSLFragmentShaderBuilder::dstColor() {
+ 
+     const GrShaderCaps* shaderCaps = fProgramBuilder->shaderCaps();
+     if (shaderCaps->fFBFetchSupport) {
++        this->codeAppend("// [FBFetch] 通过framebuffer fetch直接读取目标颜色\n");
+         this->addFeature(1 << kFramebufferFetch_GLSLPrivateFeature,
+                          shaderCaps->fFBFetchExtensionString);
+ 
+@@ -45,6 +46,7 @@ void GrGLSLFragmentShaderBuilder::enableAdvancedBlendEquationIfNeeded(
+     SkASSERT(skgpu::BlendEquationIsAdvanced(equation));
+ 
+     if (fProgramBuilder->shaderCaps()->mustEnableAdvBlendEqs()) {
++        this->extensions().append("// 高级混合方程扩展(由XP请求)\n");
+         this->addFeature(1 << kBlendEquationAdvanced_GLSLPrivateFeature,
+                          "GL_KHR_blend_equation_advanced");
+         this->addLayoutQualifier("blend_support_all_equations", kOut_InterfaceQualifier);
+diff --git a/src/gpu/ganesh/glsl/GrGLSLProgramBuilder.cpp b/src/gpu/ganesh/glsl/GrGLSLProgramBuilder.cpp
+index bbf3329d6b..218846bae3 100644
+--- a/src/gpu/ganesh/glsl/GrGLSLProgramBuilder.cpp
++++ b/src/gpu/ganesh/glsl/GrGLSLProgramBuilder.cpp
+@@ -92,10 +92,8 @@ bool GrGLSLProgramBuilder::emitAndInstallPrimProc(SkString* outputColor, SkStrin
+     fUniformHandles.fRTAdjustmentUni = this->uniformHandler()->addUniform(
+             nullptr, kVertex_GrShaderFlag, SkSLType::kFloat4, SkSL::Compiler::RTADJUST_NAME);
+ 
+-#if defined(SK_DEBUG)
+-    fFS.codeAppendf("// Stage %d, %s\n", fStageIndex, geomProc.name());
+-    fVS.codeAppendf("// Primitive Processor %s\n", geomProc.name());
+-#endif
++    fFS.codeAppendf("// [GeometryProcessor: %s] 输出初始颜色和覆盖率\n", geomProc.name());
++    fVS.codeAppendf("// [GeometryProcessor: %s] 计算顶点裁剪坐标\n", geomProc.name());
+ 
+     SkASSERT(!fGPImpl);
+     fGPImpl = geomProc.makeProgramImpl(*this->shaderCaps());
+@@ -212,6 +210,7 @@ SkString GrGLSLProgramBuilder::emitRootFragProc(const GrFragmentProcessor& fp,
+ 
+     this->writeFPFunction(fp, impl);
+ 
++    fFS.codeAppendf("// [FragmentProcessor: %s] 对输入颜色应用效果\n", fp.name());
+     fFS.codeAppendf(
+             "%s = %s;",
+             output.c_str(),
+@@ -285,12 +284,14 @@ void GrGLSLProgramBuilder::writeFPFunction(const GrFragmentProcessor& fp,
+                 break;
+             case SkSLType::kFloat2:
+                 // Just point the local coords to the varying
++                fFS.codeAppendf("// 坐标从varying '%s' 读取(VS中已预计算)\n", varying.getName().c_str());
+                 sampleCoords = varying.getName().c_str();
+                 break;
+             case SkSLType::kFloat3:
+                 // Must perform the perspective divide in the frag shader based on the
+                 // varying, and since we won't actually have a function parameter for local
+                 // coords, add it as a local variable.
++                fFS.codeAppendf("// 透视坐标从varying '%s' 读取并做w除法\n", varying.getName().c_str());
+                 fFS.codeAppendf("float2 %s = %s.xy / %s.z;\n",
+                                 sampleCoords,
+                                 varying.getName().c_str(),
+@@ -320,6 +321,7 @@ void GrGLSLProgramBuilder::writeFPFunction(const GrFragmentProcessor& fp,
+     impl.emitCode(args);
+     impl.setFunctionName(fFS.getMangledFunctionName(args.fFp.name()));
+ 
++    fFS.functions().appendf("// [FP函数: %s -> %s]\n", impl.functionName(), fp.name());
+     fFS.emitFunction(SkSLType::kHalf4,
+                      impl.functionName(),
+                      SkSpan(params, numParams),
+@@ -353,9 +355,7 @@ bool GrGLSLProgramBuilder::emitAndInstallDstTexture() {
+                 SkSLType::kHalf4,
+                 "DstTextureCoords",
+                 &dstTextureCoordsName);
+-#if defined(SK_DEBUG)
+-        fFS.codeAppend("// Read color from copy of the destination\n");
+-#endif
++        fFS.codeAppend("// [DstTexture] 从目标纹理副本采样已有颜色(混合需要)\n");
+         if (dstTextureProxy->textureType() == GrTextureType::k2D) {
+             fFS.codeAppendf("float2 _dstTexCoord = (sk_FragCoord.xy - %s.xy) * %s.zw;\n",
+                     dstTextureCoordsName, dstTextureCoordsName);
+@@ -388,9 +388,7 @@ bool GrGLSLProgramBuilder::emitAndInstallDstTexture() {
+ 
+         // Populate the _dstColor variable by loading from the input attachment at the top of the
+         // fragment shader.
+-#if defined(SK_DEBUG)
+-        fFS.codeAppend("// Read color from input attachment\n");
+-#endif
++        fFS.codeAppend("// [DstInputAttachment] 通过input attachment读取目标颜色\n");
+         const char* dstColor = fFS.dstColor();
+         SkString dstColorDecl = SkStringPrintf("half4 %s;", dstColor);
+         fFS.definitionAppend(dstColorDecl.c_str());
+@@ -417,11 +415,7 @@ bool GrGLSLProgramBuilder::emitAndInstallXferProc(const SkString& colorIn,
+     }
+ 
+     SkString openBrace;
+-#if defined(SK_DEBUG)
+-    openBrace.printf("{ // Xfer Processor: %s\n", xp.name());
+-#else
+-    openBrace.printf("{\n");
+-#endif
++    openBrace.printf("{ // [XferProcessor: %s] 源与目标颜色混合\n", xp.name());
+     fFS.codeAppend(openBrace.c_str());
+ 
+     SkString finalInColor = colorIn.size() ? colorIn : SkString("float4(1)");
+diff --git a/src/gpu/ganesh/glsl/GrGLSLShaderBuilder.cpp b/src/gpu/ganesh/glsl/GrGLSLShaderBuilder.cpp
+index 2c90b3d24c..ab57ce29fd 100644
+--- a/src/gpu/ganesh/glsl/GrGLSLShaderBuilder.cpp
++++ b/src/gpu/ganesh/glsl/GrGLSLShaderBuilder.cpp
+@@ -146,6 +146,8 @@ void GrGLSLShaderBuilder::appendColorGamutXform(SkString* out,
+         return;
+     }
+ 
++    this->functions().append("// [色彩空间转换] transfer function + gamut矩阵变换\n");
++
+     GrGLSLUniformHandler* uniformHandler = fProgramBuilder->uniformHandler();
+ 
+     // We define up to three helper functions, to keep things clearer. One for the source transfer
+@@ -340,7 +342,44 @@ void GrGLSLShaderBuilder::finalize(uint32_t visibility) {
+     // append the 'footer' to code
+     this->code().append("}");
+ 
++    static const char* kSectionComments[] = {
++        "// [Section: Extensions] 功能: 声明GPU扩展(高级混合/framebuffer fetch等)\n"
++        "// 拼接原因: 特定GPU功能需要显式启用扩展\n",
++
++        "// [Section: Definitions] 功能: 全局常量和变量(如_dstColor)\n"
++        "// 拼接原因: processor需要的全局状态在函数外声明\n",
++
++        "// [Section: PrecisionQualifier] 功能: 浮点精度声明\n"
++        "// 拼接原因: GPU架构要求显式精度限定\n",
++
++        "// [Section: LayoutQualifiers] 功能: layout限定符\n"
++        "// 拼接原因: Vulkan管线需要接口内存布局描述\n",
++
++        "// [Section: Uniforms] 功能: CPU传入的uniform数据\n"
++        "// 拼接原因: processor请求的uniform参数统一声明\n",
++
++        "// [Section: Inputs] 功能: 着色器输入(VS=顶点属性, FS=varying)\n"
++        "// 拼接原因: processor间数据传递需要的输入声明\n",
++
++        "// [Section: Outputs] 功能: 着色器输出(VS=varying, FS=颜色)\n"
++        "// 拼接原因: 管线阶段间传递数据或输出到framebuffer\n",
++
++        "// [Section: Functions] 功能: 辅助函数(FP函数/色彩空间转换等)\n"
++        "// 拼接原因: FP生成独立函数支持递归调用和模块化\n",
++
++        "// [Section: Main] 功能: main()入口\n"
++        "// 拼接原因: 着色器执行入口点\n",
++    };
++
+     for (int i = 0; i <= fCodeIndex; i++) {
++        if (fShaderStrings[i].size() > 0) {
++            if (i < (int)std::size(kSectionComments)) {
++                fCompilerString.append(kSectionComments[i]);
++            } else {
++                fCompilerString.append(
++                    SkStringPrintf("// [Code Stage %d]\n", i - kCode).c_str());
++            }
++        }
+         fCompilerString.append(fShaderStrings[i].c_str(), fShaderStrings[i].size());
+     }
+ 
+diff --git a/src/gpu/ganesh/glsl/GrGLSLVarying.cpp b/src/gpu/ganesh/glsl/GrGLSLVarying.cpp
+index 8645ea262d..a5049a0f46 100644
+--- a/src/gpu/ganesh/glsl/GrGLSLVarying.cpp
++++ b/src/gpu/ganesh/glsl/GrGLSLVarying.cpp
+@@ -20,6 +20,7 @@ void GrGLSLVaryingHandler::addPassThroughAttribute(const GrShaderVar& vsVar,
+     SkASSERT(vsVar.getType() != SkSLType::kVoid);
+     GrGLSLVarying v(vsVar.getType());
+     this->addVarying(vsVar.c_str(), &v, interpolation);
++    fProgramBuilder->fVS.codeAppendf("// 传递顶点属性 '%s' → FS\n", vsVar.c_str());
+     fProgramBuilder->fVS.codeAppendf("%s = %s;", v.vsOut(), vsVar.c_str());
+     fProgramBuilder->fFS.codeAppendf("%s = %s;", output, v.fsIn());
+ }
+@@ -112,13 +113,16 @@ void GrGLSLVaryingHandler::finalize() {
+ 
+ void GrGLSLVaryingHandler::appendDecls(const VarArray& vars, SkString* out) const {
+     for (const GrShaderVar& varying : vars.items()) {
++        out->appendf("//   %s (%s)\n", varying.getName().c_str(), SkSLTypeString(varying.getType()));
+         varying.appendDecl(fProgramBuilder->shaderCaps(), out);
+         out->append(";");
+     }
+ }
+ 
+ void GrGLSLVaryingHandler::getVertexDecls(SkString* inputDecls, SkString* outputDecls) const {
++    inputDecls->append("// [顶点属性] 来自顶点缓冲区\n");
+     this->appendDecls(fVertexInputs, inputDecls);
++    outputDecls->append("// [Varying输出] VS→FS插值数据\n");
+     this->appendDecls(fVertexOutputs, outputDecls);
+ }
+ 
+@@ -126,6 +130,8 @@ void GrGLSLVaryingHandler::getFragDecls(SkString* inputDecls, SkString* outputDe
+     // We should not have any outputs in the fragment shader when using version 1.10
+     SkASSERT(SkSL::GLSLGeneration::k110 != fProgramBuilder->shaderCaps()->fGLSLGeneration ||
+              fFragOutputs.empty());
++    inputDecls->append("// [Varying输入] 从VS接收\n");
+     this->appendDecls(fFragInputs, inputDecls);
++    outputDecls->append("// [片段输出] 写入framebuffer\n");
+     this->appendDecls(fFragOutputs, outputDecls);
+ }
+diff --git a/src/gpu/ganesh/glsl/GrGLSLVertexGeoBuilder.cpp b/src/gpu/ganesh/glsl/GrGLSLVertexGeoBuilder.cpp
+index 09b92fd023..c9180a7e0f 100644
+--- a/src/gpu/ganesh/glsl/GrGLSLVertexGeoBuilder.cpp
++++ b/src/gpu/ganesh/glsl/GrGLSLVertexGeoBuilder.cpp
+@@ -13,6 +13,7 @@
+ 
+ void GrGLSLVertexGeoBuilder::emitNormalizedSkPosition(SkString* out, const char* devPos,
+                                                       SkSLType devPosType) {
++    out->append("// [顶点位置] 设备坐标→裁剪坐标\n");
+     if (this->getProgramBuilder()->snapVerticesToPixelCenters()) {
+         if (SkSLType::kFloat3 == devPosType) {
+             const char* p = devPos;
+@@ -35,6 +36,7 @@ void GrGLSLVertexBuilder::onFinalize() {
+     // We could have the GrGeometryProcessor do this, but its just easier to have it performed
+     // here. If we ever need to set variable pointsize, then we can reinvestigate.
+     if (this->getProgramBuilder()->hasPointSize()) {
++        this->codeAppend("// [PointSize] 点图元大小=1像素\n");
+         this->codeAppend("sk_PointSize = 1.0;");
+     }
+     fProgramBuilder->varyingHandler()->getVertexDecls(&this->inputs(), &this->outputs());
+diff --git a/src/gpu/ganesh/ops/DrawMeshOp.cpp b/src/gpu/ganesh/ops/DrawMeshOp.cpp
+index 4e8dd71c1b..7c317ce50e 100644
+--- a/src/gpu/ganesh/ops/DrawMeshOp.cpp
++++ b/src/gpu/ganesh/ops/DrawMeshOp.cpp
+@@ -274,6 +274,11 @@ private:
+             std::string getMainName() override { return fMainName; }
+ 
+             void defineFunction(const char* decl, const char* body, bool isMain) override {
++                if (isMain) {
++                    fBuilder->functions().append("// [用户Mesh: main函数体]\n");
++                } else {
++                    fBuilder->functions().append("// [用户Mesh: 辅助函数]\n");
++                }
+                 fBuilder->emitFunction(decl, body);
+             }
+ 
+@@ -394,6 +399,8 @@ private:
+             varyingHandler->emitAttributes(mgp);
+ 
+             // Define the user's vert function.
++            vertBuilder->codeAppend("// [用户Mesh VS] 以下是SkMeshSpecification用户自定义顶点shader\n"
++                                    "// 拼接原因: 用户通过SkMesh API提供了自定义顶点处理逻辑\n");
+             SkString userVertName = vertBuilder->getMangledFunctionName("custom_mesh_vs");
+             const SkSL::Program* customVS = SkMeshSpecificationPriv::VS(*mgp.fSpec);
+             MeshCallbacks vsCallbacks(this,
+@@ -497,6 +504,8 @@ private:
+             }
+ 
+             // Define the user's frag function.
++            fragBuilder->codeAppend("// [用户Mesh FS] 以下是SkMeshSpecification用户自定义片段shader\n"
++                                    "// 拼接原因: 用户通过SkMesh API提供了自定义片段处理逻辑\n");
+             fragBuilder->codeAppendf("half4 %s;", args.fOutputColor);
+             fragBuilder->codeAppendf("const half4 %s = half4(1);", args.fOutputCoverage);
+ 
+diff --git a/src/gpu/ganesh/ops/FillRRectOp.cpp b/src/gpu/ganesh/ops/FillRRectOp.cpp
+index 4512ae3c67..d346428b27 100644
+--- a/src/gpu/ganesh/ops/FillRRectOp.cpp
++++ b/src/gpu/ganesh/ops/FillRRectOp.cpp
+@@ -871,8 +871,10 @@ private:
+         f->codeAppendf("float x_plus_1=%s.x, y=%s.y;", arcCoord.fsIn(), arcCoord.fsIn());
+         f->codeAppendf("half coverage;");
+         f->codeAppendf("if (0 == x_plus_1) {");
++        f->codeAppend("// [FillRRect: Linear] 线性边缘覆盖率\n");
+         f->codeAppendf(    "coverage = half(y);");  // We are a non-arc pixel (linear coverage).
+         f->codeAppendf("} else {");
++        f->codeAppend("// [FillRRect: Arc] 圆弧角覆盖率\n");
+         f->codeAppendf(    "float fn = x_plus_1 * (x_plus_1 - 2);");  // fn = (x+1)*(x-1) = x^2-1
+         f->codeAppendf(    "fn = fma(y,y, fn);");  // fn = x^2 + y^2 - 1
+         if (useHWDerivatives) {
+@@ -884,6 +886,7 @@ private:
+         }
+         f->codeAppendf(    "coverage = .5 - half(fn/fnwidth);");
+         if (proc.fFlags & ProcessorFlags::kMSAAEnabled) {
++            f->codeAppend("// [FillRRect: MSAA] 多采样抗锯齿\n");
+             // MSAA uses ramps larger than 1px, so we need to clamp in both branches.
+             f->codeAppendf("}");
+         }
+@@ -893,6 +896,7 @@ private:
+             f->codeAppendf("}");
+         }
+         if (proc.fFlags & ProcessorFlags::kFakeNonAA) {
++            f->codeAppend("// [FillRRect: NoAA] 无抗锯齿\n");
+             f->codeAppendf("coverage = (coverage >= .5) ? 1 : 0;");
+         }
+         f->codeAppendf("half4 %s = half4(coverage);", args.fOutputCoverage);
+diff --git a/src/gpu/ganesh/ops/GrOvalOpFactory.cpp b/src/gpu/ganesh/ops/GrOvalOpFactory.cpp
+index 462ec9ccfa..bce82a26b0 100644
+--- a/src/gpu/ganesh/ops/GrOvalOpFactory.cpp
++++ b/src/gpu/ganesh/ops/GrOvalOpFactory.cpp
+@@ -241,13 +241,17 @@ private:
+             fragBuilder->codeAppend("half distanceToOuterEdge = half(circleEdge.z * (1.0 - d));");
+             fragBuilder->codeAppend("half edgeAlpha = saturate(distanceToOuterEdge);");
+             if (cgp.fStroke) {
++                fragBuilder->codeAppend("// [Circle: Stroke] 计算内外边缘alpha\n");
+                 fragBuilder->codeAppend(
+                         "half distanceToInnerEdge = half(circleEdge.z * (d - circleEdge.w));");
+                 fragBuilder->codeAppend("half innerAlpha = saturate(distanceToInnerEdge);");
+                 fragBuilder->codeAppend("edgeAlpha *= innerAlpha;");
++            } else {
++                fragBuilder->codeAppend("// [Circle: Fill] 仅外边缘alpha\n");
+             }
+ 
+             if (cgp.fInClipPlane.isInitialized()) {
++                fragBuilder->codeAppend("// [Circle: ClipPlane] 应用裁剪平面\n");
+                 fragBuilder->codeAppend(
+                         "half clip = half(saturate(circleEdge.z * dot(circleEdge.xy, "
+                         "clipPlane.xy) + clipPlane.z));");
+@@ -671,6 +675,7 @@ private:
+             // by zero, then we scale the result back.
+ 
+             // for outer curve
++            fragBuilder->codeAppend("// [Ellipse] 椭圆边缘距离计算\n");
+             fragBuilder->codeAppendf("float2 offset = %s.xy;", ellipseOffsets.fsIn());
+             if (egp.fStroke) {
+                 fragBuilder->codeAppendf("offset *= %s.xy;", ellipseRadii.fsIn());
+@@ -859,6 +864,7 @@ private:
+             gpArgs->fLocalCoordVar = diegp.fInPosition.asShaderVar();
+ 
+             // for outer curve
++            fragBuilder->codeAppend("// [DIEllipse] 设备无关椭圆\n");
+             fragBuilder->codeAppendf("float2 scaledOffset = %s.xy;", offsets0.fsIn());
+             fragBuilder->codeAppend("float test = dot(scaledOffset, scaledOffset) - 1.0;");
+             fragBuilder->codeAppendf("float2 duvdx = dFdx(%s.xy);", offsets0.fsIn());
+diff --git a/src/gpu/ganesh/ops/LatticeOp.cpp b/src/gpu/ganesh/ops/LatticeOp.cpp
+index 5544521dd6..e6af7192ad 100644
+--- a/src/gpu/ganesh/ops/LatticeOp.cpp
++++ b/src/gpu/ganesh/ops/LatticeOp.cpp
+@@ -120,6 +120,7 @@ public:
+                 WriteOutputPosition(args.fVertBuilder, gpArgs, latticeGP.fInPosition.name());
+                 gpArgs->fLocalCoordVar = latticeGP.fInTextureCoords.asShaderVar();
+ 
++                args.fFragBuilder->codeAppend("// [Lattice] 九宫格图像渲染\n");
+                 args.fFragBuilder->codeAppend("float2 textureCoords;");
+                 args.fVaryingHandler->addPassThroughAttribute(
+                         latticeGP.fInTextureCoords.asShaderVar(),
+diff --git a/src/gpu/ganesh/ops/QuadPerEdgeAA.cpp b/src/gpu/ganesh/ops/QuadPerEdgeAA.cpp
+index d6f4375caf..75856a139b 100644
+--- a/src/gpu/ganesh/ops/QuadPerEdgeAA.cpp
++++ b/src/gpu/ganesh/ops/QuadPerEdgeAA.cpp
+@@ -693,6 +693,7 @@ public:
+                 args.fVaryingHandler->emitAttributes(gp);
+ 
+                 if (gp.fCoverageMode == CoverageMode::kWithPosition) {
++                    args.fVertBuilder->codeAppend("// [QuadAA: PositionCoverage] 从顶点位置提取coverage\n");
+                     // Strip last channel from the vertex attribute to remove coverage and get the
+                     // actual position
+                     if (gp.fNeedsPerspective) {
+@@ -738,6 +739,7 @@ public:
+                 // If there is a texture, must also handle texture coordinates and reading from
+                 // the texture in the fragment shader before continuing to fragment processors.
+                 if (gp.fSampler.isInitialized()) {
++                    args.fFragBuilder->codeAppend("// [QuadAA: TextureSample] 纹理采样\n");
+                     // Texture coordinates clamped by the subset on the fragment shader; if the GP
+                     // has a texture, it's guaranteed to have local coordinates
+                     args.fFragBuilder->codeAppend("float2 texCoord;");
+@@ -756,6 +758,7 @@ public:
+ 
+                     // Clamp the now 2D localCoordName variable by the subset if it is provided
+                     if (gp.fTexSubset.isInitialized()) {
++                        args.fFragBuilder->codeAppend("// [QuadAA: SubsetClamp] 纹理子区域钳制\n");
+                         args.fFragBuilder->codeAppend("float4 subset;");
+                         args.fVaryingHandler->addPassThroughAttribute(gp.fTexSubset.asShaderVar(),
+                                                                       "subset",
+diff --git a/src/gpu/ganesh/vk/GrVkUniformHandler.cpp b/src/gpu/ganesh/vk/GrVkUniformHandler.cpp
+index b99cd4c491..42cc025ab3 100644
+--- a/src/gpu/ganesh/vk/GrVkUniformHandler.cpp
++++ b/src/gpu/ganesh/vk/GrVkUniformHandler.cpp
+@@ -344,6 +344,7 @@ void GrVkUniformHandler::appendUniformDecls(GrShaderFlags visibility, SkString*
+         SkASSERT(sampler.fVariable.getType() == SkSLType::kTexture2DSampler ||
+                  sampler.fVariable.getType() == SkSLType::kTextureExternalSampler);
+         if (visibility == sampler.fVisibility) {
++            out->appendf("// [Sampler] %s\n", sampler.fRawName.c_str());
+             sampler.fVariable.appendDecl(fProgramBuilder->shaderCaps(), out);
+             out->append(";\n");
+         }
+@@ -351,6 +352,7 @@ void GrVkUniformHandler::appendUniformDecls(GrShaderFlags visibility, SkString*
+     if (fInputUniform.fVariable.getType() == SkSLType::kInput) {
+         if (visibility == fInputUniform.fVisibility) {
+             SkASSERT(visibility == kFragment_GrShaderFlag);
++            out->appendf("// [InputAttachment] %s\n", fInputUniform.fRawName.c_str());
+             fInputUniform.fVariable.appendDecl(fProgramBuilder->shaderCaps(), out);
+             out->append(";\n");
+         }
+@@ -377,6 +379,9 @@ void GrVkUniformHandler::appendUniformDecls(GrShaderFlags visibility, SkString*
+     for (const VkUniformInfo& localUniform : fUniforms.items()) {
+         if (visibility & localUniform.fVisibility) {
+             if (SkSLTypeCanBeUniformValue(localUniform.fVariable.getType())) {
++                const char* ownerName = localUniform.fOwner ? localUniform.fOwner->name() : "Built-in";
++                uniformsString.appendf("    // [Uniform] %s (所属: %s)\n",
++                                       localUniform.fRawName.c_str(), ownerName);
+                 Layout layout = fUsePushConstants ? kStd430Layout : kStd140Layout;
+                 uniformsString.appendf("layout(offset=%u) ", localUniform.fOffsets[layout]);
+                 localUniform.fVariable.appendDecl(fProgramBuilder->shaderCaps(), &uniformsString);
